@@ -3,11 +3,12 @@ import {
   JsonRpcProvider,
   Interface,
   TransactionResponse,
+  HDNodeWallet,
 } from "ethers";
-import { PaymentChannel } from "./PaymentChannel";
+import { PaymentChannel } from "./PaymentChannel.ts";
 
 type Contract = {
-  abi: string[];
+  abi: any[];
   address: string;
 };
 
@@ -30,7 +31,7 @@ type ChannelManagerConfig = {
 };
 
 export class ChannelManager {
-  private wallet: Wallet;
+  private wallet: HDNodeWallet;
   private config: ChannelManagerConfig;
 
   // TODO: This should move to a database model instead of being ephemeral state.
@@ -62,7 +63,7 @@ export class ChannelManager {
       const urls = chains[chain].providers;
       const providers: InstanceType<typeof JsonRpcProvider>[] = [];
       for (const url of urls) {
-        providers.push(new JsonRpcProvider(url, chain));
+        providers.push(new JsonRpcProvider(url, parseInt(chain)));
       }
       config.chains[chain] = {
         providers,
@@ -72,7 +73,7 @@ export class ChannelManager {
     }
 
     this.config = config;
-    this.wallet = new Wallet(mnemonic);
+    this.wallet = Wallet.fromPhrase(mnemonic);
   }
 
   public openChannel(
