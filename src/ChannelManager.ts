@@ -1,8 +1,10 @@
-import { Wallet, providers, utils } from "ethers";
+import {
+  Wallet,
+  JsonRpcProvider,
+  Interface,
+  TransactionResponse,
+} from "ethers";
 import { PaymentChannel } from "./PaymentChannel";
-
-const { StaticJsonRpcProvider } = providers;
-const { Interface } = utils;
 
 type Contract = {
   abi: string[];
@@ -18,7 +20,7 @@ type ChannelManagerConfig = {
   chains: {
     [chainId: string]: {
       assets: string[];
-      providers: InstanceType<typeof StaticJsonRpcProvider>[];
+      providers: InstanceType<typeof JsonRpcProvider>[];
       contracts: Contracts;
     };
   };
@@ -58,9 +60,9 @@ export class ChannelManager {
     };
     for (const chain of Object.keys(chains)) {
       const urls = chains[chain].providers;
-      const providers: InstanceType<typeof StaticJsonRpcProvider>[] = [];
+      const providers: InstanceType<typeof JsonRpcProvider>[] = [];
       for (const url of urls) {
-        providers.push(new StaticJsonRpcProvider(url, chain));
+        providers.push(new JsonRpcProvider(url, chain));
       }
       config.chains[chain] = {
         providers,
@@ -259,8 +261,9 @@ export class ChannelManager {
     for (const provider of this.config[chainId].providers) {
       try {
         if (read) {
-          // TODO: Why can't we import providers.TransactionResponse here?
-          const res = await (provider as typeof StaticJsonRpcProvider).call(tx);
+          const res: TransactionResponse = await (
+            provider as typeof JsonRpcProvider
+          ).call(tx);
           return await res.wait();
         } else {
           // Connect the wallet to the target RPC provider.
