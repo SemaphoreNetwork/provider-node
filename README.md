@@ -1,7 +1,7 @@
 # Provider Node
 
-To run the state channel test script, install ts-node globally and execute, from root:
+To run the state channel test script execute, from root:
 
 ```
-ts-node src/stateChannelTest.ts
+node --loader ts-node/esm src/stateChannelTest.ts
 ```

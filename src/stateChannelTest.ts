@@ -18,6 +18,9 @@ async function main() {
 
   // console.log(contract.address);
   // console.log(contract.deployTransaction);
+  console.log("hello world");
 }
 
 main();
+
+export {};
