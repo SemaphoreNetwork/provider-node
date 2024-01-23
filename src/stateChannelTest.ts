@@ -35,8 +35,8 @@ async function deployContract(
   const contract = await factory.deploy(...args);
   const dpTxReceipt = await contract.deploymentTransaction().wait();
 
-  console.log(await contract.getAddress());
-  console.log(dpTxReceipt);
+  console.log("Deployed contract at:", await contract.getAddress());
+  console.log("Deployment tx:", dpTxReceipt.hash);
   return new Contract(await contract.getAddress(), artifact.abi, signer);
 }
 
@@ -291,25 +291,26 @@ async function main() {
     }
   }
 
-  // TODO: Replace with ID.
-  let nonce: number = 0;
-  let nonceVerified = false;
-  while (!nonceVerified) {
-    const res: boolean = await PaymentsContract.isNonceUsed(
-      await subscriber.getAddress(),
-      nonce
-    );
-    nonceVerified = !res;
-  }
-  console.log("Got nonce:", nonce);
+  // Generate a random ID for the state channel session.
+  const id = await PaymentsContract.getRandomId(
+    subscriber.address,
+    provider.address,
+    Math.floor(Math.random() * 100000 + 1)
+  );
+  console.log("Generated ID:", id);
+
+  // Expiry in 3 days.
+  const expiry = Math.floor(new Date().getTime() / 1000 + 60 * 60 * 72);
+  console.log("Expiry time:", expiry);
 
   // Have the subscriber sign off on a payment.
-  const types = ["address", "uint256", "address", "uint256"];
+  const types = ["bytes32", "address", "address", "uint256", "uint256"];
   const values = [
+    id,
     provider.address,
-    nonce,
     await TestERC20Contract.getAddress(),
     100,
+    expiry,
   ];
   const digest = solidityPackedKeccak256(types, values);
   const sig = subscriber.signingKey.sign(digest).serialized;
@@ -329,9 +330,10 @@ async function main() {
     );
     try {
       const res = await PaymentsContractProvider.claim(
-        nonce,
+        id,
         await TestERC20Contract.getAddress(),
         100,
+        expiry,
         sig
       );
       const receipt = await res.wait();
