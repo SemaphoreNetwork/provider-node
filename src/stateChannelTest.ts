@@ -9,6 +9,14 @@ import {
   ErrorFragment,
   AbiCoder,
   keccak256,
+  recoverAddress,
+  solidityPackedKeccak256,
+  toBeArray,
+  verifyMessage,
+  hashMessage,
+  toBeHex,
+  concat,
+  toUtf8Bytes,
 } from "ethers";
 import { ChannelManager } from "./ChannelManager.ts";
 import * as dotenv from "dotenv";
@@ -303,11 +311,14 @@ async function main() {
     await TestERC20Contract.getAddress(),
     100,
   ];
-  const encoded = AbiCoder.defaultAbiCoder().encode(types, values);
-  const hash = keccak256(encoded);
-  const sig = await subscriber.signMessage(hash);
+  const digest = solidityPackedKeccak256(types, values);
+  const sig = subscriber.signingKey.sign(digest).serialized;
+
+  // Recover the address to ensure signature is valid.
+  const address = recoverAddress(digest, sig);
   console.log("Signed:", values);
   console.log("Signature:", sig);
+  console.log("Recovered address:", address);
 
   // Submit claim using provider.
   {
@@ -323,7 +334,7 @@ async function main() {
         100,
         sig
       );
-      const receipt = res.wait();
+      const receipt = await res.wait();
       console.log("Claim receipt:", receipt);
     } catch (e) {
       const selector = e.data.substring(0, 10);
