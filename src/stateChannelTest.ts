@@ -31,8 +31,8 @@ async function main() {
   // Instantiate operator, subscriber, and provider wallets.
   const rpc = new JsonRpcProvider("https://rpc2.sepolia.org", chainId);
   const operator = Wallet.fromPhrase(process.env.MNEMONIC, rpc);
-  const subscriber = Wallet.fromPhrase(process.env.SUBSCRIBER_A);
-  const provider = Wallet.fromPhrase(process.env.PROVIDER_A);
+  const subscriber = Wallet.fromPhrase(process.env.SUBSCRIBER_A, rpc);
+  const provider = Wallet.fromPhrase(process.env.PROVIDER_A, rpc);
 
   // Get TEST token contract. If there is no contract, deploy one.
   const TestERC20Contract = (TestERC20 as any).address
@@ -76,7 +76,92 @@ async function main() {
     10 * 60
   );
 
-  // Have the subscriber sign off on a payment.
+  // Mint tokens for subscriber.
+  const amount = 1000;
+  {
+    // Get the current amount.
+    let currentAmount = 0;
+    {
+      const res = await TestERC20Contract.balanceOf(subscriber.address);
+      currentAmount = parseInt(res.toString());
+      console.log("Subscriber tokens:", currentAmount);
+    }
+    // If the subscriber has less than the target amount, mint tokens.
+    if (currentAmount < amount) {
+      const res = await TestERC20Contract.mint(
+        subscriber.address,
+        amount - currentAmount
+      );
+      const receipt = await res.wait();
+      console.log("Mint res:", res);
+
+      // Check new amount to be confirm.
+      {
+        const res = await TestERC20Contract.balanceOf(subscriber.address);
+        currentAmount = parseInt(res.toString());
+        console.log("Subscriber tokens after mint:", currentAmount);
+      }
+    }
+  }
+
+  // Send ETH to subscriber if needed.
+  {
+    let currentAmount = BigInt("0");
+    const minimumAmount = BigInt("10000000000000000"); // 0.01 ETH
+    // Check current balance.
+    {
+      const res = await rpc.getBalance(subscriber);
+      currentAmount = BigInt(res.toString());
+      console.log("Subscriber ETH:", currentAmount.toString());
+    }
+    // Add more ETH if needed.
+    if (currentAmount < minimumAmount) {
+      const res = await operator.sendTransaction({
+        to: subscriber.address,
+        value: BigInt("50000000000000000") - BigInt(currentAmount.toString()), // 0.05 ETH
+      });
+      const receipt = await res.wait();
+      console.log("Fund ETH receipt:", receipt);
+
+      // Check new balance.
+      {
+        const res = await rpc.getBalance(subscriber);
+        currentAmount = BigInt(res.toString());
+        console.log("Subscriber ETH:", currentAmount.toString());
+      }
+    }
+  }
+
+  // Ensure the token is permissioned correctly on the Payments contract.
+  {
+    const address = await TestERC20Contract.getAddress();
+    const res = await PaymentsContract.isAssetAllowed(address);
+    if (!res) {
+      console.log("Token is not permitted yet on Payments contract.");
+      const res = await PaymentsContract.allowAsset(address);
+      const receipt = await res.wait();
+      console.log("allowAsset receipt:", receipt);
+    }
+  }
+
+  // Subscriber deposits tokens into the Payments contract.
+  {
+    console.log("Depositing tokens:", amount);
+    // For some reason ethers' .connect() fn not working.
+    const PaymentsContractSubscriber = new Contract(
+      (Payments as any).address,
+      Payments.abi,
+      subscriber
+    );
+    const res = await PaymentsContractSubscriber.deposit(
+      await TestERC20Contract.getAddress(),
+      amount
+    );
+    const receipt = await res.wait();
+    console.log("Deposit receipt:", receipt);
+  }
+
+  // TODO: Replace with ID.
   let nonce: number = 0;
   let nonceVerified = false;
   while (!nonceVerified) {
@@ -87,9 +172,10 @@ async function main() {
     nonceVerified = !res;
   }
   console.log("Got nonce:", nonce);
-  //
-  // const types = ["uint256", "address", "uint256", "bytes"];
-  // const values = [];
+
+  // Have the subscriber sign off on a payment.
+  const types = ["uint256", "address", "uint256", "bytes"];
+  const values = [nonce, await TestERC20Contract.getAddress(), 100];
   // const sig = subscriber.signMessage();
 }
 
