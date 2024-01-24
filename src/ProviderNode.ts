@@ -72,14 +72,34 @@ export class ProviderNode {
     this.wallet = Wallet.fromPhrase(mnemonic);
   }
 
-  public async openChannel(
-    chainId: string,
-    subscriber: string,
-    asset: string,
-    amount: string,
-    expiry: number,
-    signature?: string
-  ): Promise<string> {
+  /**
+   * Open a new state channel session for a given subscriber on a given chain. Payment will be
+   * delivered in the specified asset, and micro-payments are conducted by increasing amount,
+   * expiry, and updating the signature.
+   *
+   * @param chainId - The chain that the state channel redemption will take place.
+   * @param subscriber - The subscriber address.
+   * @param asset - The asset in which payment is conducted.
+   * @param amount - The initial amount for this channel.
+   * @param expiry - The on-chain expiry of the channel.
+   * @param signature - The signature on (id, provider, asset, amount, expiry) digest.
+   * @returns The generated ID string of the new channel.
+   */
+  public async openChannel({
+    chainId,
+    subscriber,
+    asset,
+    amount,
+    expiry,
+    signature,
+  }: {
+    chainId: string;
+    subscriber: string;
+    asset: string;
+    amount: string;
+    expiry: number;
+    signature?: string;
+  }): Promise<string> {
     // Ensure not retired.
     this.assertNotRetired();
 
@@ -93,12 +113,7 @@ export class ProviderNode {
     }
 
     // Check to ensure the expiry is valid.
-    if (
-      expiry - Math.floor(new Date().getTime() / 1000) <
-      this.config.channels.expiryTolerance
-    ) {
-      throw new Error("Time til expiry is insufficient.");
-    }
+    this.assertValidExpiry(expiry);
 
     // TODO: Check if subscriber address is a valid subscriber.
     // const contract = this.config.chains[chainId].contracts.SemaphoreHSS;
@@ -114,7 +129,7 @@ export class ProviderNode {
 
     // Init payment channel.
     const id = await this.generateId(chainId, subscriber);
-    this.cache.upsertChannel({
+    this.cache.insertChannel({
       id,
       chainId,
       sender: subscriber,
@@ -129,6 +144,42 @@ export class ProviderNode {
     // open at a time. If they do have one open, we should close that one and open another.
 
     return id;
+  }
+
+  /**
+   * Updates the state of a channel with given ID to increase delivered amount.
+   *
+   * @param id - The ID string of the updated channel.
+   * @param amount - The new amount delivered. Should be greater than the previous amount.
+   * @param expiry - The new expiry for the state channel. Should be at minimum a tolerated
+   * amount of time from the current time (e.g. 2 days).
+   * @param signature - The signature of the subscriber on (id, provider, asset, amount,
+   * expiry) digest.
+   */
+  public async updateChannel({
+    id,
+    amount,
+    expiry,
+    signature,
+  }: {
+    id: string;
+    amount: string;
+    expiry: number;
+    signature?: string;
+  }) {
+    // Ensure not retired.
+    this.assertNotRetired();
+
+    // Check to ensure the expiry is valid.
+    this.assertValidExpiry(expiry);
+
+    // TODO: Verify that the signature works.
+    this.cache.updateChannel({
+      id,
+      amount,
+      expiry,
+      signature,
+    });
   }
 
   public async redeemChannels(withMinTime): Promise<number> {
@@ -146,6 +197,13 @@ export class ProviderNode {
     }
     await this.closeChannels(closingChannels);
     return closingChannels.length;
+  }
+
+  /**
+   * Retire this provider node instance, preventing any new incoming channels.
+   */
+  public retire() {
+    this.isRetired = true;
   }
 
   private async closeChannels(channels: Channel[]) {
@@ -169,9 +227,11 @@ export class ProviderNode {
         console.log("Unable to close channel with ID:", channel.id);
         continue;
       }
-      // Close out the channel in the cache.
-      res = this.cache.closeChannel(channel.id);
     }
+    // Close out the channel in the cache.
+    const success = this.cache.closeChannels(
+      channels.map((channel) => channel.id)
+    );
   }
 
   private isChainSupported(chainId: string): boolean {
@@ -190,6 +250,22 @@ export class ProviderNode {
       }
     }
     return false;
+  }
+
+  private assertNotRetired() {
+    if (this.isRetired) {
+      throw new Error("Provider is no longer accepting incoming connections.");
+    }
+  }
+
+  private assertValidExpiry(expiry: number) {
+    // Check to ensure the expiry is valid.
+    if (
+      expiry - Math.floor(new Date().getTime() / 1000) <
+      this.config.channels.expiryTolerance
+    ) {
+      throw new Error("Time til expiry is insufficient.");
+    }
   }
 
   // Generate a random ID for a state channel session.

@@ -90,7 +90,7 @@ export class ChannelCache {
    * @returns List of all currently open channels.
    */
   public async getOpenChannels(): Promise<ChannelList> {
-    const res = await this.data.hget(`${this.prefix}:open`);
+    const res = await this.data.hget(`${this.prefix}:list`, "open");
     return res ? (JSON.parse(res) as ChannelList) : [];
   }
 
@@ -99,24 +99,24 @@ export class ChannelCache {
    * @returns List of all currently closed channels.
    */
   public async getClosedChannels(): Promise<ChannelList> {
-    const res = await this.data.hget(`${this.prefix}:closed`);
+    const res = await this.data.hget(`${this.prefix}:list`, "closed");
     return res ? (JSON.parse(res) as ChannelList) : [];
   }
 
   /**
-   * Close a channel with given ID.
-   * @param id - The ID of the channel we are closing.
+   * Close channel(s) with given IDs.
+   * @param ids - The IDs of the channels we are closing.
    * @returns true if channel was closed, false if doesn't exist.
    */
-  public async closeChannel(id: string): Promise<boolean> {
-    // Remove target id from open channel list and commit.
-    let res = await this.updateChannelList("open", id, true);
+  public async closeChannels(ids: string[]): Promise<boolean> {
+    // Remove target ID from open channel list and commit.
+    let res = await this.updateChannelList("open", ids, true);
     if (!res) {
       return false;
     }
 
     // Add this ID into the closed channels list and commit.
-    res = await this.updateChannelList("closed", id, false);
+    res = await this.updateChannelList("closed", ids, false);
     if (!res) {
       return false;
     }
@@ -124,10 +124,11 @@ export class ChannelCache {
   }
 
   /**
-   * Creates or updates an existing channel entry for the given channel ID.
+   * Creates a channel entry for the given channel ID.
    *
    * @param data.id - The ID of channel.
    * @param data.chainId - The ID of the chain where redemptions will take place.
+   * @param data.sender - The subscriber address.
    * @param data.asset - The token asset being transferred.
    * @param data.amount - The latest amount of tokens being secured in the channel.
    * @param data.expiry - The on-chain expiry of the channel (can be updated).
@@ -135,7 +136,7 @@ export class ChannelCache {
    *
    * @returns 0 if updated, 1 if created.
    */
-  public async upsertChannel({
+  public async insertChannel({
     id,
     chainId,
     sender,
@@ -153,40 +154,86 @@ export class ChannelCache {
     signature: string;
   }): Promise<number> {
     let channel: Channel;
-    // If channel entry exists, add to it. Otherwise, we'll create a new entry.
+    // If channel entry exists, throw an error. Otherwise, we'll create a new entry.
     channel = await this.getChannel(id);
+    if (channel) {
+      throw new Error(`Channel with given ID (${id}) already exists.`);
+    }
 
     const timestamp = Math.floor(new Date().getTime() / 1000);
+    // Create a new channel.
+    channel = {
+      id,
+      chainId,
+      sender,
+      receiver: this.receiver,
+      asset,
+      state: {
+        timestamp,
+        iteration: 1,
+        amount,
+        expiry,
+        signature,
+      },
+    };
+
+    // Record the channel entry.
+    const res = await this.data.hset(
+      `${this.prefix}:channel`,
+      id,
+      JSON.stringify(channel)
+    );
+    // Update open channels list.
+    const updateRes = await this.updateChannelList("open", [id], false);
+
+    // TODO: Check responses?
+
+    return Number(res >= 1);
+  }
+
+  /**
+   * Updates an existing channel entry for the given channel ID.
+   *
+   * @param data.id - The ID of channel.
+   * @param data.amount - The latest amount of tokens being secured in the channel.
+   * @param data.expiry - The on-chain expiry of the channel (can be updated).
+   * @param data.signature - The sender's signature on digest (id, provider, asset, amount, expiry).
+   *
+   * @returns 0 if updated, 1 if created.
+   */
+  public async updateChannel({
+    id,
+    amount,
+    expiry,
+    signature,
+  }: {
+    id: string;
+    amount: string;
+    expiry: number;
+    signature: string;
+  }): Promise<number> {
+    // Get current channel.
+    let channel = await this.getChannel(id);
     if (!channel) {
-      // Create a new channel if no entry exists.
-      channel = {
-        id,
-        chainId,
-        sender,
-        receiver: this.receiver,
-        asset,
-        state: {
-          timestamp,
-          iteration: 1,
-          amount,
-          expiry,
-          signature,
-        },
-      };
-    } else {
-      // Update the channel entry if it already exists.
-      channel = {
-        ...channel,
-        state: {
-          timestamp,
-          // Increasing iterations by 1.
-          iteration: channel.state.iteration + 1,
-          amount,
-          expiry,
-          signature,
-        },
-      };
+      throw new Error(`Channel with given ID (${id}) does not exist.`);
     }
+
+    // Ensure that this channel is still open.
+    this.assertChannelIsOpen(id);
+
+    const timestamp = Math.floor(new Date().getTime() / 1000);
+    // Update the channel entry.
+    channel = {
+      ...channel,
+      state: {
+        timestamp,
+        // Increasing iterations by 1.
+        iteration: channel.state.iteration + 1,
+        amount,
+        expiry,
+        signature,
+      },
+    };
 
     // Record the channel entry.
     let res = await this.data.hset(
@@ -194,49 +241,68 @@ export class ChannelCache {
       id,
       JSON.stringify(channel)
     );
-    // Update open channels list.
-    res = await this.updateChannelList("open", id, false);
 
     // TODO: Check responses?
 
     return Number(res >= 1);
   }
 
+  private async assertChannelIsOpen(id: string) {
+    const res = await this.data.hget(`${this.prefix}:list`, "open");
+    const channelList = res
+      ? (JSON.parse(res) as ChannelList)
+      : ([] as ChannelList);
+    const index = channelList.findIndex((value) => value === id);
+    if (index === -1) {
+      throw new Error(`Channel with given ID ${id} is no longer open.`);
+    }
+  }
+
   private async updateChannelList(
     which: "open" | "closed",
-    id: string,
+    ids: string[],
     remove: boolean
-  ): Promise<boolean> {
+  ): Promise<boolean[]> {
     // Get current list of open channels.
-    let res = await this.data.hget(`${this.prefix}:${which}`);
-    if (!res) {
-      return false;
-    }
-    const channelList = JSON.parse(res) as ChannelList;
-    // Find the target channel index. If this is an insert operation, we want to make sure
-    // it doesn't already exist.
-    const targetChannelIndex = channelList.findIndex((value) => value === id);
+    const getRes = await this.data.hget(`${this.prefix}:list`, which);
+    const success: boolean[] = [];
+    // If the channel list does not already exist, we'll start with an empty array.
+    const channelList = getRes
+      ? (JSON.parse(getRes) as ChannelList)
+      : ([] as ChannelList);
+    for (const id of ids) {
+      // Find the target channel index. If this is an insert operation, we want to make sure
+      // it doesn't already exist.
+      const targetChannelIndex = channelList.findIndex((value) => value === id);
 
-    if (remove) {
-      // Make sure the entry already exists.
-      if (targetChannelIndex === -1) {
-        return false;
+      if (remove) {
+        // Make sure the entry already exists.
+        if (targetChannelIndex === -1) {
+          success.push(false);
+          continue;
+        }
+        // Remove target value from array.
+        channelList.splice(targetChannelIndex, 1);
+      } else {
+        // Make sure the entry does not exist.
+        if (targetChannelIndex !== -1) {
+          success.push(false);
+          continue;
+        }
+        // Insert target value into array.
+        channelList.push(id);
       }
-      // Remove target value from array.
-      channelList.splice(targetChannelIndex, 1);
-    } else {
-      // Make sure the entry does not exist.
-      if (targetChannelIndex !== -1) {
-        return false;
-      }
-      // Insert target value into array.
-      channelList.push(id);
     }
+
     // Commit the new change.
-    res = await this.data.hset(
+    const setRes = await this.data.hset(
       `${this.prefix}:${which}`,
       JSON.stringify(channelList)
     );
+
+    // TODO: Check res?
+
+    return success;
   }
 
   /**
