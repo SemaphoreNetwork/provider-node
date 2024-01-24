@@ -1,26 +1,17 @@
-import Payments from "../artifacts/contracts/Payments.sol/Payments.json" with { type: "json" };
-import TestERC20 from "../artifacts/contracts/TestERC20.sol/TestERC20.json" with { type: "json" };
-import SemaphoreHSS from "../artifacts/contracts/SemaphoreHSS.sol/SemaphoreHSS.json" with { type: "json" };
+import Payments from "../artifacts/sepolia/Payments.sol/Payments.json" with { type: "json" };
+import TestERC20 from "../artifacts/sepolia/TestERC20.sol/TestERC20.json" with { type: "json" };
+import SemaphoreHSS from "../artifacts/sepolia/SemaphoreHSS.sol/SemaphoreHSS.json" with { type: "json" };
 import {
   Wallet,
   ContractFactory,
   JsonRpcProvider,
   Contract,
   ErrorFragment,
-  AbiCoder,
-  keccak256,
   recoverAddress,
   solidityPackedKeccak256,
-  toBeArray,
-  verifyMessage,
-  hashMessage,
-  toBeHex,
-  concat,
-  toUtf8Bytes,
 } from "ethers";
 import { ChannelManager } from "./ChannelManager.ts";
 import * as dotenv from "dotenv";
-import fs from "fs";
 
 dotenv.config();
 
