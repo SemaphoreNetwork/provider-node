@@ -10,7 +10,7 @@ import {
   recoverAddress,
   solidityPackedKeccak256,
 } from "ethers";
-import { ChannelManager } from "./ChannelManager.ts";
+// import { ProviderNode } from "./ProviderNode.ts";
 import * as dotenv from "dotenv";
 
 dotenv.config();
@@ -63,28 +63,6 @@ async function main() {
   // const res = await SemaphoreHSSContract.getProviderKey(0);
   // console.log(res);
   // TODO: Ensure subscriber is registered with HSS.
-
-  // Make channel manager for our provider to use.
-  // const channelManager = new ChannelManager(
-  //   process.env.MNEMONIC,
-  //   {
-  //     [chainId.toString()]: {
-  //       providers: ["https://rpc2.sepolia.org"],
-  //       assets: [await TestERC20Contract.getAddress()],
-  //       contracts: {
-  //         Payments: {
-  //           abi: Payments.abi,
-  //           address: await PaymentsContract.getAddress(),
-  //         },
-  //         SemaphoreHSS: {
-  //           abi: SemaphoreHSS.abi,
-  //           address: await SemaphoreHSSContract.getAddress(),
-  //         },
-  //       },
-  //     },
-  //   },
-  //   10 * 60
-  // );
 
   // Mint tokens for subscriber.
   const amount = 1000;
