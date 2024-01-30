@@ -77,6 +77,8 @@ export class ProviderNode {
    * delivered in the specified asset, and micro-payments are conducted by increasing amount,
    * expiry, and updating the signature.
    *
+   * @param id - The unique random identifier for this state channel session. Should have been
+   * generated before producing the initial signature on the subscriber side.
    * @param chainId - The chain that the state channel redemption will take place.
    * @param subscriber - The subscriber address.
    * @param asset - The asset in which payment is conducted.
@@ -86,6 +88,7 @@ export class ProviderNode {
    * @returns The generated ID string of the new channel.
    */
   public async openChannel({
+    id,
     chainId,
     subscriber,
     asset,
@@ -93,6 +96,7 @@ export class ProviderNode {
     expiry,
     signature,
   }: {
+    id: string;
     chainId: string;
     subscriber: string;
     asset: string;
@@ -115,20 +119,22 @@ export class ProviderNode {
     // Check to ensure the expiry is valid.
     this.assertValidExpiry(expiry);
 
-    // TODO: Check if subscriber address is a valid subscriber.
-    // const contract = this.config.chains[chainId].contracts.SemaphoreHSS;
-    // this.sendTransaction(
-    //   chainId,
-    //   contract,
-    //   "isSubscriber",
-    //   [subscriber],
-    //   false
-    // );
+    // Check if subscriber address is a valid subscriber.
+    if (!this.checkIfSubscriber(chainId, subscriber)) {
+      throw new Error("Not a valid subscriber address.");
+    }
 
-    // TODO: Verify that the signature works.
+    // Verify that the signature works.
+    await this.assertValidSignature({
+      id,
+      chainId,
+      asset,
+      amount,
+      expiry,
+      signature,
+    });
 
     // Init payment channel.
-    const id = await this.generateId(chainId, subscriber);
     this.cache.insertChannel({
       id,
       chainId,
@@ -140,8 +146,8 @@ export class ProviderNode {
     });
 
     // TODO:
-    // Subscriber may already have an open channel on this chain, and cannot have more than one
-    // open at a time. If they do have one open, we should close that one and open another.
+    // Subscriber may already have an open channel on this chain, and may be unideal to have more
+    // than one open at a time. If they do have one open, we should close that one and open another.
 
     return id;
   }
@@ -173,8 +179,21 @@ export class ProviderNode {
     // Check to ensure the expiry is valid.
     this.assertValidExpiry(expiry);
 
-    // TODO: Verify that the signature works.
-    this.cache.updateChannel({
+    // Get the current channel.
+    const channel = await this.cache.getChannel(id);
+
+    // Verify that the signature works.
+    await this.assertValidSignature({
+      id,
+      chainId: channel.chainId,
+      asset: channel.asset,
+      amount,
+      expiry,
+      signature,
+    });
+
+    // Finally, update the channel's current state.
+    await this.cache.updateChannel({
       id,
       amount,
       expiry,
@@ -182,6 +201,13 @@ export class ProviderNode {
     });
   }
 
+  /**
+   * Submit `claim()` calls for all channels with a specified minimum amount of time since
+   * last updated.
+   * @param withMinTime - Minimum time in seconds for a channel to exist without updates to
+   * qualify for redemption.
+   * @returns Number of channels redeemed.
+   */
   public async redeemChannels(withMinTime): Promise<number> {
     const openChannels = await this.cache.getOpenChannels();
     const closingChannels = [];
@@ -234,6 +260,24 @@ export class ProviderNode {
     );
   }
 
+  /** Generate a random ID for a state channel session.
+   * @param chainId - ID of the chain to call `getRandomId` on.
+   * @param subscriber - The subscriber address
+   */
+  public async generateId(
+    chainId: string,
+    subscriber: string
+  ): Promise<string> {
+    const id = await this.sendTransaction<string>(
+      chainId,
+      this.config.chains[chainId].contracts.Payments,
+      "getRandomId",
+      [subscriber, this.wallet.address, Math.floor(Math.random() * 100000 + 1)],
+      true
+    );
+    return id;
+  }
+
   private isChainSupported(chainId: string): boolean {
     for (const chain in Object.keys(this.config.chains)) {
       if (chain === chainId) {
@@ -268,19 +312,76 @@ export class ProviderNode {
     }
   }
 
-  // Generate a random ID for a state channel session.
-  private async generateId(
+  private async checkIfSubscriber(
     chainId: string,
     subscriber: string
-  ): Promise<string> {
-    const id = await this.sendTransaction<string>(
+  ): Promise<boolean> {
+    const contract = this.config.chains[chainId].contracts.SemaphoreHSS;
+    const result = await this.sendTransaction<boolean>(
+      chainId,
+      contract,
+      "isSubscriber",
+      [subscriber],
+      false
+    );
+    return result;
+  }
+
+  private async assertValidSignature({
+    id,
+    chainId,
+    asset,
+    amount,
+    expiry,
+    signature,
+  }: {
+    id: string;
+    chainId: string;
+    asset: string;
+    amount: string;
+    expiry: number;
+    signature: string;
+  }) {
+    const success = await this.estimateGas(
       chainId,
       this.config.chains[chainId].contracts.Payments,
-      "getRandomId",
-      [subscriber, this.wallet.address, Math.floor(Math.random() * 100000 + 1)],
-      true
+      "claim",
+      [id, asset, amount, expiry, signature]
     );
-    return id;
+    if (!success) {
+      throw new Error("Invalid signature.");
+    }
+  }
+
+  private async estimateGas(
+    chainId: string,
+    contract: ContractInfo,
+    functionName: string,
+    args: any[]
+  ): Promise<boolean> {
+    // Derive encoded calldata.
+    const iface = new Interface(contract.abi as any[]);
+    const data = iface.encodeFunctionData(functionName, args);
+    // Format transaction.
+    const tx = {
+      to: contract.address,
+      data,
+      chainId: +chainId,
+    };
+
+    const errors: any[] = [];
+    for (const provider of this.config[chainId].providers) {
+      try {
+        // Connect the wallet to the target RPC provider.
+        this.wallet.connect(provider);
+        // Estimate gas.
+        const res = await this.wallet.estimateGas(tx);
+        return true;
+      } catch (e) {
+        errors.push(this.parseOnChainError(iface, e));
+      }
+    }
+    return false;
   }
 
   // Will iterate through all available providers for a given chain until one works.
@@ -317,27 +418,30 @@ export class ProviderNode {
           return (await res.wait()) as T;
         }
       } catch (e) {
-        let error: any;
-        if (e.data) {
-          const selector = e.data.substring(0, 10);
-          const fragment = iface.fragments.find(
-            (fragment) => (fragment as ErrorFragment).selector === selector
-          );
-          if (fragment) {
-            error = {
-              name: (fragment as ErrorFragment).name,
-              signature: fragment.format(),
-              args: iface.decodeErrorResult(fragment as ErrorFragment, e.data),
-            };
-          }
-        }
-
-        errors.push(error ? error : e);
+        errors.push(this.parseOnChainError(iface, e));
       }
     }
 
     // TODO: Should we store these errors anywhere?
     console.log("Error:", functionName, args, errors[0]);
     return undefined;
+  }
+
+  private parseOnChainError(iface: Interface, e: any): any {
+    let error: any;
+    if (e.data) {
+      const selector = e.data.substring(0, 10);
+      const fragment = iface.fragments.find(
+        (fragment) => (fragment as ErrorFragment).selector === selector
+      );
+      if (fragment) {
+        error = {
+          name: (fragment as ErrorFragment).name,
+          signature: fragment.format(),
+          args: iface.decodeErrorResult(fragment as ErrorFragment, e.data),
+        };
+      }
+    }
+    return error ?? e;
   }
 }
