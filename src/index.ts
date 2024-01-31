@@ -1,10 +1,13 @@
 import { Static, Type } from "@sinclair/typebox";
 import fastify, { FastifyInstance, FastifyReply } from "fastify";
-import { ProviderNode } from "./ProviderNode";
+import { ProviderNode } from "./ProviderNode.ts";
+import * as dotenv from "dotenv";
 
 import SepoliaPayments from "../artifacts/sepolia/Payments.sol/Payments.json" with { type: "json" };
 import SepoliaTestERC20 from "../artifacts/sepolia/TestERC20.sol/TestERC20.json" with { type: "json" };
 import SepoliaSemaphoreHSS from "../artifacts/sepolia/SemaphoreHSS.sol/SemaphoreHSS.json" with { type: "json" };
+
+dotenv.config();
 
 const AdminRequestSchema = Type.Object({
   adminToken: Type.String(),
@@ -36,6 +39,17 @@ type SemaphoreError = {
   stack?: string;
 };
 
+type ServerConfig = {
+  server: {
+    adminToken: string;
+    port: number;
+    host: string;
+  };
+  channels: {
+    ttl: number;
+  };
+};
+
 /**
  * Converts an error into a json-like object.
  *
@@ -48,17 +62,6 @@ const formatError = (error: Error): SemaphoreError => {
     type: error.name,
     context: {},
     stack: error.stack,
-  };
-};
-
-type ServerConfig = {
-  server: {
-    adminToken: string;
-    port: number;
-    host: string;
-  };
-  channels: {
-    ttl: number;
   };
 };
 
@@ -180,8 +183,12 @@ const api = {
 };
 
 async function main() {
+  const mnemonic = process.env.MNEMONIC;
+  if (!mnemonic) {
+    throw new Error("No mnemonic found. Please define MNEMONIC in .env.");
+  }
   const provider = new ProviderNode(
-    process.env.MNEMONIC,
+    mnemonic,
     {
       // TODO: Support for other chains, use a JSON config, etc.
       "11155111": {
@@ -219,10 +226,8 @@ async function main() {
 
   server.get("/ping", (_, res) => api.get.ping(res));
 
-  server.get<{ Body: IdGenRequest }>(
-    "/uuid",
-    { schema: { body: IdGenRequestSchema } },
-    (req, res) => api.get.uuid(provider, req.body, res)
+  server.get<{ Body: IdGenRequest }>("/uuid", (req, res) =>
+    api.get.uuid(provider, req.body, res)
   );
 
   server.post<{ Body: AdminRequest }>(

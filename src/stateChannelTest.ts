@@ -10,7 +10,7 @@ import {
   recoverAddress,
   solidityPackedKeccak256,
 } from "ethers";
-// import { ProviderNode } from "./ProviderNode.ts";
+import { ProviderNode } from "./ProviderNode.ts";
 import * as dotenv from "dotenv";
 
 dotenv.config();
